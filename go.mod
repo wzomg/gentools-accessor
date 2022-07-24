@@ -1,4 +1,4 @@
-module gentools-accessor
+module github.com/wzomg/gentools-accessor
 
 go 1.18
 
