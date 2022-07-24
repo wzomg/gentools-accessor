@@ -7,7 +7,7 @@
 ### 工具安装
 
 ```shell
-go install github.com/wzomg/gentools-accessor
+go install github.com/wzomg/gentools-accessor@latest
 ```
 
 ### 用法示例
