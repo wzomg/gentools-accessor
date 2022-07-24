@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"flag"
 	"fmt"
 	"go/ast"
 	"go/parser"
@@ -20,19 +21,35 @@ const AccessRead = "r"
 const AccessWrite = "w"
 const AccessTagName = "access"
 
+var (
+	fileName = flag.String("file", "", "a parsed filename; must be set")
+)
+
 func main() {
 	log.SetFlags(0) // 设置日志的抬头信息
 	log.SetPrefix("gentools-accessor: ")
-	// 获取执行文件的文件名
-	inputName := os.Getenv("GOFILE")
+	flag.Parse() //把用户传递的命令行参数解析为对应变量的值
+
+	var inputName string
+	if len(*fileName) > 0 {
+		inputName = *fileName
+	} else {
+		//尝试获取当前被执行的文件
+		inputName = os.Getenv("GOFILE")
+	}
+
+	if len(inputName) == 0 {
+		log.Fatalf("请输入一个正确的待解析的文件路径！")
+		return
+	}
 	log.Println("当前文件名为：", inputName)
-	outputName := inputName[:len(inputName)-3] + ".accessor.go"
 
 	g := Generator{
 		buf: bytes.NewBufferString(""),
 	}
 	g.generate(inputName)
 	var src = (g.buf).Bytes()
+	outputName := strings.TrimSuffix(inputName, ".go") + ".accessor.go"
 	err := ioutil.WriteFile(outputName, src, 0644) // ignore_security_alert
 	if err != nil {
 		log.Fatalf("writing output: %s\n", err)
