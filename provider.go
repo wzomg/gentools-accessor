@@ -63,7 +63,7 @@ func main() {
 		log.Fatalln("Please enter a correct file path to be parsed！")
 		return
 	}
-	log.Println("\n\t\nThe currently executed fileName is: ", inputName)
+	log.Println("\n\tThe currently executed fileName is: ", inputName)
 
 	g := Generator{
 		buf: bytes.NewBufferString(""),
