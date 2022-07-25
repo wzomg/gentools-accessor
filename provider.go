@@ -140,7 +140,7 @@ func (g *Generator) generate(fileName string, modeVal int) {
 		for index, field := range info {
 			lowerName := strings.ToLower(field.Name)
 			if d, exist := visMap[lowerName]; exist {
-				log.Fatalf("有两个含义相近的命名：%s 和 %s，请改正！终止生成代码～\n", lowerName, info[d].Name)
+				log.Fatalf("\n\t结构体 %s 中：有两个含义相近的命名：%s 和 %s，请改正！终止生成代码～\n", stName, info[d].Name, field.Name)
 				return
 			}
 			visMap[lowerName] = index
