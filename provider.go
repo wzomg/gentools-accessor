@@ -15,6 +15,7 @@ import (
 	"text/template"
 
 	"github.com/fatih/structtag"
+	"golang.org/x/tools/imports"
 )
 
 const AccessRead = "r"
@@ -23,12 +24,23 @@ const AccessTagName = "access"
 
 var (
 	fileName = flag.String("file", "", "a parsed filename; must be set")
+	modeType = flag.Int("mode", 0, "parse unexported fields and generate Setter methods for them")
 )
 
 func main() {
 	log.SetFlags(0) // 设置日志的抬头信息
 	log.SetPrefix("gentools-accessor: ")
 	flag.Parse() //把用户传递的命令行参数解析为对应变量的值
+
+	var mode int
+	if modeType != nil {
+		if *modeType < 0 || *modeType > 1 {
+			log.Fatalln("-mode参数值范围为[0, 1]，0: 不对不导出的字段生成setter方法，1：对不导出的字段生成setter方法")
+			return
+		} else {
+			mode = *modeType
+		}
+	}
 
 	var inputName string
 	if len(*fileName) > 0 {
@@ -39,7 +51,7 @@ func main() {
 	}
 
 	if len(inputName) == 0 {
-		log.Fatalf("请输入一个正确的待解析的文件路径！")
+		log.Fatalln("请输入一个正确的待解析的文件路径！")
 		return
 	}
 	log.Println("当前文件名为：", inputName)
@@ -47,8 +59,8 @@ func main() {
 	g := Generator{
 		buf: bytes.NewBufferString(""),
 	}
-	g.generate(inputName)
-	var src = (g.buf).Bytes()
+	g.generate(inputName, mode)
+	src := g.formatCode()
 	outputName := strings.TrimSuffix(inputName, ".go") + ".accessor.go"
 	err := ioutil.WriteFile(outputName, src, 0644) // ignore_security_alert
 	if err != nil {
@@ -70,18 +82,37 @@ type Generator struct {
 	buf *bytes.Buffer // Accumulated output.
 }
 
+// FormatCode sets the options of the imports pkg and then applies the Process method
+// which by default removes all of the imports not used and formats the remaining docs,
+// imports and code like `gofmt`. It will e.g. remove paranthesis around a unnamed single return type
+func (g *Generator) formatCode() []byte {
+	opts := &imports.Options{
+		TabIndent: true,
+		TabWidth:  2,
+		Fragment:  true,
+		Comments:  true,
+	}
+	src := (g.buf).Bytes()
+	fmtCode, err := imports.Process("", src, opts)
+	if err != nil {
+		log.Fatalln("格式化代码失败")
+		return src
+	}
+	return fmtCode
+}
+
 func (g *Generator) myPrintf(format string, args ...interface{}) {
 	_, _ = fmt.Fprintf(g.buf, format, args...)
 }
 
-func (g *Generator) generate(fileName string) {
+func (g *Generator) generate(fileName string, modeVal int) {
 	fset := token.NewFileSet()
 	f, err := parser.ParseFile(fset, fileName, nil, parser.ParseComments)
 	if err != nil || f == nil {
 		log.Fatalln("解析文件失败")
 		return
 	}
-	structInfo, err := parseAllStructInSingleFile(f, fset, AccessTagName)
+	structInfo, err := parseAllStructInSingleFile(f, fset, AccessTagName, modeVal)
 	if err != nil {
 		log.Fatalln("解析文件中结构体失败: ", err)
 		return
@@ -90,6 +121,10 @@ func (g *Generator) generate(fileName string) {
 	g.myPrintf("\n")
 	g.myPrintf("package %s\n", f.Name)
 	g.myPrintf("\n")
+	// 将源文件导入的包名写入
+	if len(f.Imports) > 0 {
+		g.myPrintf("%s\n", genImports(f.Imports))
+	}
 	for stName, info := range structInfo {
 		for _, field := range info {
 			for _, access := range field.Access {
@@ -104,7 +139,7 @@ func (g *Generator) generate(fileName string) {
 	}
 }
 
-func parseAllStructInSingleFile(file *ast.File, fileSet *token.FileSet, tagName string) (structMap map[string]StructFieldInfoArr, err error) {
+func parseAllStructInSingleFile(file *ast.File, fileSet *token.FileSet, tagName string, modeVal int) (structMap map[string]StructFieldInfoArr, err error) {
 	structMap = make(map[string]StructFieldInfoArr)
 
 	collectStructs := func(x ast.Node) bool {
@@ -122,6 +157,9 @@ func parseAllStructInSingleFile(file *ast.File, fileSet *token.FileSet, tagName 
 		}
 		fileInfos := make([]StructFieldInfo, 0)
 		for _, field := range s.Fields.List {
+			if len(field.Names) == 0 { // Notice: 跳过组合struct的字段
+				continue
+			}
 			name := field.Names[0].Name // 字段名称
 			info := StructFieldInfo{Name: name}
 			var typeNameBuf bytes.Buffer
@@ -154,8 +192,12 @@ func parseAllStructInSingleFile(file *ast.File, fileSet *token.FileSet, tagName 
 				firstChar := name[0:1]
 				if strings.ToUpper(firstChar) == firstChar { //大写，封装对外可读可写
 					info.Access = []string{AccessRead, AccessWrite}
-				} else { // 小写，只封装可读方法，字段名的首字母也不改成大写
-					info.Access = []string{AccessRead}
+				} else { // 小写
+					if modeVal == 1 { // 模式为1，封装可读可读方法
+						info.Access = []string{AccessRead, AccessWrite}
+					} else { // 模式为0，只封装可读方法
+						info.Access = []string{AccessRead}
+					}
 				}
 			}
 			fileInfos = append(fileInfos, info)
@@ -167,6 +209,27 @@ func parseAllStructInSingleFile(file *ast.File, fileSet *token.FileSet, tagName 
 	ast.Inspect(file, collectStructs)
 
 	return structMap, nil
+}
+
+func genImports(importsArr []*ast.ImportSpec) string {
+	packageNameArr := make([]string, 0)
+	for _, s := range importsArr {
+		if s.Name != nil {
+			packageNameArr = append(packageNameArr, fmt.Sprintf("%s %s\n", s.Name.Name, s.Path.Value))
+		} else {
+			packageNameArr = append(packageNameArr, s.Path.Value)
+		}
+	}
+	tpl := `import (
+		{{ range . }}
+			{{ . }}
+		{{ end }}
+	)`
+	t := template.New("imports")
+	t = template.Must(t.Parse(tpl))
+	res := bytes.NewBufferString("")
+	_ = t.Execute(res, packageNameArr)
+	return res.String()
 }
 
 func genSetter(structName, fieldName, typeName string) string {
